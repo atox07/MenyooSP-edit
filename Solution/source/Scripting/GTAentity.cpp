@@ -443,9 +443,6 @@ void GTAentity::SetScale(Vector3 value)
 		};
 		apply(ptr + 0x60, value.x, value.y, value.z);
 		if (drawPtr) apply(drawPtr + 0x20, value.x, value.y, value.z);
-		GTAmemory::WriteFloat(ptr + 0x60, value.x);
-		GTAmemory::WriteFloat(ptr + 0x74, value.y);
-		GTAmemory::WriteFloat(ptr + 0x88, value.z);
 	}
 	else if (IsPed())
 	{
