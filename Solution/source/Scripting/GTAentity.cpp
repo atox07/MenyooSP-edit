@@ -33,6 +33,7 @@
 #include <string>
 #include <vector>
 #include <cmath>
+#include <cstdio>
 
 namespace 
 {
@@ -44,6 +45,17 @@ namespace
 
 namespace
 {
+	// ---- DEBUG: scrive l'ultimo passaggio eseguito (sovrascrive il file ogni volta) ----
+	void MALog(const char* stage, int a = 0, int b = 0)
+	{
+		FILE* f = nullptr;
+		if (fopen_s(&f, "Menyoo_attach_debug.log", "w") == 0 && f)
+		{
+			fprintf(f, "%s | h1=%d h2=%d\n", stage, a, b);
+			fclose(f);
+		}
+	}
+
 	// ---- Attach manuale (entita' scalate) ----
 	struct ManualAttachment
 	{
@@ -139,6 +151,7 @@ namespace
 	bool TryAttachManually(GTAentity child, GTAentity parent, int bone, const Vector3& offset, const Vector3& rotation)
 	{
 		const int ch = child.GetHandle();
+		MALog("TryAttach:start", ch, parent.GetHandle());
 		if (ch == parent.GetHandle()) return false;
 		{
 			// Ciclo (il genitore dipende gia' dal figlio): attach ignorato, il nativo andrebbe in crash
@@ -151,6 +164,7 @@ namespace
 				cur = p->parent;
 			}
 		}
+		MALog("TryAttach:isScaled", ch, parent.GetHandle());
 		if (!IsScaledEntity(child))
 		{
 			ReleaseManualAttachment(ch); // non piu' scalata: torna all'attach nativo
@@ -159,6 +173,7 @@ namespace
 		ManualAttachment* a = FindManualAttachment(ch);
 		if (!a)
 		{
+			MALog("TryAttach:detachNative", ch, parent.GetHandle());
 			if (IS_ENTITY_ATTACHED(ch)) DETACH_ENTITY(ch, 1, 1); // evita doppio controllo
 			ManualAttachment n{};
 			n.child = ch;
@@ -171,9 +186,13 @@ namespace
 		a->bone = bone;
 		a->offset = offset;
 		a->rotation = rotation;
+		MALog("TryAttach:getScale", ch, parent.GetHandle());
 		a->scale = child.GetScale();
+		MALog("TryAttach:collision", ch, parent.GetHandle());
 		child.SetIsCollisionEnabled(false);
+		MALog("TryAttach:freeze", ch, parent.GetHandle());
 		child.FreezePosition(true);
+		MALog("TryAttach:done", ch, parent.GetHandle());
 		return true;
 	}
 }
@@ -538,7 +557,9 @@ void GTAentity::SetRotation(Vector3 value)
 
 Vector3 GTAentity::GetScale() const
 {
+	MALog("GetScale:addr", mHandle);
 	UINT64 ptr = GTAmemory::_entityAddressFunc(mHandle);
+	MALog("GetScale:read", mHandle);
 	if (!ptr) return Vector3(1.0f, 1.0f, 1.0f);
 
 	// La scala e' la lunghezza dei tre vettori della matrice (la diagonale contiene anche la rotazione)
@@ -550,7 +571,9 @@ Vector3 GTAentity::GetScale() const
 
 void GTAentity::SetScale(Vector3 value)
 {
+	MALog("SetScale:addr", mHandle);
 	UINT64 ptr = GTAmemory::_entityAddressFunc(mHandle);
+	MALog("SetScale:entityMatrix", mHandle);
 	if (!ptr) return;
 
 	if (value.x < 0.01f) value.x = 0.01f;
@@ -570,9 +593,12 @@ void GTAentity::SetScale(Vector3 value)
 
 	apply(ptr + kEntityRightVecOffset, value.x, value.y, value.z);
 
+	MALog("SetScale:vehicleCheck", mHandle);
 	if (IsVehicle())
 	{
+		MALog("SetScale:drawPtr", mHandle);
 		UINT64 drawPtr = *reinterpret_cast<UINT64*>(ptr + 0x30);
+		MALog("SetScale:drawMatrix", mHandle);
 		if (drawPtr) apply(drawPtr + 0x20, value.x, value.y, value.z);
 	}
 
@@ -878,6 +904,7 @@ void GTAentity::UpdateManualAttachments()
 	{
 		ManualAttachment a = g_manualAttachments[i];
 		GTAentity child(a.child), parent(a.parent);
+		MALog("Update:exists", a.child, a.parent);
 		if (!child.Exists() || !parent.Exists())
 		{
 			ReleaseManualAttachment(a.child); // rimuove la voce, non incrementare i
@@ -886,14 +913,20 @@ void GTAentity::UpdateManualAttachments()
 
 		// La lettura diretta della matrice dell'osso puo' mandare in crash il gioco con un indice non valido:
 		// la uso solo se l'indice e' dentro il numero di ossi del genitore.
+		MALog("Update:boneCount", a.child, a.parent);
 		bool useBone = a.bone >= 0 && a.bone < parent.GetBoneCount();
+		MALog("Update:position", a.child, a.parent);
 		Vector3 pos = useBone ? parent.GetOffsetFromBoneInWorldCoords(a.bone, a.offset) : parent.GetOffsetInWorldCoords(a.offset);
 		if (useBone && pos.x == 0.0f && pos.y == 0.0f && pos.z == 0.0f)
 			pos = parent.GetOffsetInWorldCoords(a.offset); // osso non trovato
 
+		MALog("Update:parentRotation", a.child, a.parent);
 		Mat3 world = MulMat(EulerToMatrix(parent.GetRotation()), EulerToMatrix(a.rotation));
+		MALog("Update:setRotation", a.child, a.parent);
 		child.SetRotation(MatrixToEuler(world)); // SET_ENTITY_ROTATION ricostruisce la matrice: la scala va riapplicata dopo
+		MALog("Update:setPosition", a.child, a.parent);
 		child.SetPosition(pos);
+		MALog("Update:setScale", a.child, a.parent);
 		child.SetScale(a.scale);
 		++i;
 	}
@@ -907,12 +940,14 @@ void GTAentity::AttachTo(GTAentity entity, int boneIndex, bool collision)
 void GTAentity::AttachTo(GTAentity entity, int boneIndex, bool collision, Vector3 position, Vector3 rotation)
 {
 	if (TryAttachManually(*this, entity, boneIndex, position, rotation)) return;
+	MALog("AttachTo:native2", this->mHandle, entity.Handle());
 	ATTACH_ENTITY_TO_ENTITY(this->mHandle, entity.Handle(), boneIndex, position.x, position.y, position.z, rotation.x, rotation.y, rotation.z, false, false, collision, false, 2, true, 0);
 }
 
 void GTAentity::AttachTo(GTAentity entity, int boneIndex, Vector3 position, Vector3 rotation, bool b9, bool useSoftPinning, bool collision, bool isPed, int vertexIndex, bool fixedRot)
 {
 	if (TryAttachManually(*this, entity, boneIndex, position, rotation)) return;
+	MALog("AttachTo:native3", this->mHandle, entity.Handle());
 	ATTACH_ENTITY_TO_ENTITY(this->mHandle, entity.Handle(), boneIndex, position.x, position.y, position.z, rotation.x, rotation.y, rotation.z, b9, useSoftPinning, collision, isPed, vertexIndex, fixedRot, 0);
 }
 
