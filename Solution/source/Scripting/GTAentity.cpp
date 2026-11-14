@@ -46,26 +46,15 @@ namespace
 
 namespace
 {
-	// ---- DEBUG: scrive l'ultimo passaggio eseguito (sovrascrive il file ogni volta) ----
 	const char* g_lastStage = "";
 
-	void MALog(const char* stage, int a = 0, int b = 0)
+	// atox fixes: last stage tracker, only used by the error log
+	inline void MALog(const char* stage, int = 0, int = 0)
 	{
 		g_lastStage = stage;
-		// Scrive sia nella cartella corrente sia in una cartella sempre scrivibile
-		static const char* paths[] = { "Menyoo_attach_debug.log", "C:\\Users\\Public\\Menyoo_attach_debug.log" };
-		for (const char* path : paths)
-		{
-			FILE* f = nullptr;
-			if (fopen_s(&f, path, "w") == 0 && f)
-			{
-				fprintf(f, "%s | h1=%d h2=%d\n", stage, a, b);
-				fclose(f);
-			}
-		}
 	}
 
-	// Esegue f() intercettando solo le access violation (senza oggetti da distruggere in questa funzione)
+	// atox fixes: run f(), catch access violations only
 	template <typename F>
 	bool RunGuarded(F&& f)
 	{
@@ -73,7 +62,7 @@ namespace
 		__except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) { return false; }
 	}
 
-	// ---- Attach manuale (entita' scalate) ----
+	// atox fixes: manual attach for scaled entities
 	struct ManualAttachment
 	{
 		int child;
@@ -94,7 +83,7 @@ namespace
 		return nullptr;
 	}
 
-	// Toglie l'entita' dalla lista e ripristina collisione/freeze che aveva prima
+	// atox fixes: drop entry, restore old collision/freeze
 	void ReleaseManualAttachment(int childHandle)
 	{
 		for (size_t i = 0; i < g_manualAttachments.size(); ++i)
@@ -118,7 +107,7 @@ namespace
 		return std::fabs(s.x - 1.0f) > 0.01f || std::fabs(s.y - 1.0f) > 0.01f || std::fabs(s.z - 1.0f) > 0.01f;
 	}
 
-	// Rotazioni GTA: angoli in gradi, ordine 2 (ZXY): x = pitch, y = roll, z = yaw
+	// GTA rotation order 2 (ZXY), degrees: x pitch, y roll, z yaw
 	struct Mat3 { float m[3][3]; };
 	inline constexpr float kDegToRad = 0.0174532925f;
 	inline constexpr float kRadToDeg = 57.2957795f;
@@ -163,15 +152,14 @@ namespace
 		return Vector3(pitch * kRadToDeg, roll * kRadToDeg, yaw * kRadToDeg);
 	}
 
-	// Se l'entita' e' scalata la attacca "a mano" e ritorna true; altrimenti ritorna false
-	// e l'attach nativo prosegue normalmente.
+	// atox fixes: true = attached manually (scaled), false = use native attach
 	bool TryAttachManuallyImpl(GTAentity child, GTAentity parent, int bone, const Vector3& offset, const Vector3& rotation)
 	{
 		const int ch = child.GetHandle();
 		MALog("TryAttach:start", ch, parent.GetHandle());
 		if (ch == parent.GetHandle()) return false;
 		{
-			// Ciclo (il genitore dipende gia' dal figlio): attach ignorato, il nativo andrebbe in crash
+			// atox fixes: cycle check, skip the attach
 			int cur = parent.GetHandle();
 			for (int depth = 0; depth < 16; ++depth)
 			{
@@ -184,14 +172,14 @@ namespace
 		MALog("TryAttach:isScaled", ch, parent.GetHandle());
 		if (!IsScaledEntity(child))
 		{
-			ReleaseManualAttachment(ch); // non piu' scalata: torna all'attach nativo
+			ReleaseManualAttachment(ch); // not scaled anymore, native attach
 			return false;
 		}
 		ManualAttachment* a = FindManualAttachment(ch);
 		if (!a)
 		{
 			MALog("TryAttach:detachNative", ch, parent.GetHandle());
-			if (IS_ENTITY_ATTACHED(ch)) DETACH_ENTITY(ch, 1, 1); // evita doppio controllo
+			if (IS_ENTITY_ATTACHED(ch)) DETACH_ENTITY(ch, 1, 1); // atox fixes: drop native attach first
 			ManualAttachment n{};
 			n.child = ch;
 			n.prevFrozen = child.IsPositionFrozen();
@@ -221,7 +209,7 @@ namespace
 			FILE* f = nullptr;
 			if (fopen_s(&f, path, "a") == 0 && f)
 			{
-				fprintf(f, "%s | ultimo passaggio: %s\n", msg, g_lastStage);
+				fprintf(f, "%s | last stage: %s\n", msg, g_lastStage);
 				fclose(f);
 			}
 		}
@@ -229,7 +217,7 @@ namespace
 
 	bool g_manualAttachDisabled = false;
 
-	// Dopo un'eccezione: spegne l'attach manuale senza far cadere il gioco
+	// atox fixes: disable manual attach after an exception
 	void HandleManualFailure(const char* where)
 	{
 		WriteErrorLog(where);
@@ -252,7 +240,7 @@ namespace
 		bool result = false;
 		if (!RunGuarded([&]() { result = TryAttachManuallyImpl(child, parent, bone, offset, rotation); }))
 		{
-			HandleManualFailure("Eccezione in TryAttachManually");
+			HandleManualFailure("Exception in TryAttachManually");
 			return false;
 		}
 		return result;
@@ -624,7 +612,7 @@ Vector3 GTAentity::GetScale() const
 	MALog("GetScale:read", mHandle);
 	if (!ptr) return Vector3(1.0f, 1.0f, 1.0f);
 
-	// La scala e' la lunghezza dei tre vettori della matrice (la diagonale contiene anche la rotazione)
+	// atox fixes: scale = vector lengths (the diagonal also holds rotation)
 	Vector3 r = GTAmemory::ReadVector3(ptr + kEntityRightVecOffset);
 	Vector3 f = GTAmemory::ReadVector3(ptr + kEntityForwardVecOffset);
 	Vector3 u = GTAmemory::ReadVector3(ptr + kEntityUpVecOffset);
@@ -642,7 +630,7 @@ void GTAentity::SetScale(Vector3 value)
 	if (value.y < 0.01f) value.y = 0.01f;
 	if (value.z < 0.01f) value.z = 0.01f;
 
-	// Riscala i tre vettori mantenendo la direzione (quindi la rotazione)
+	// keep direction, only change length
 	auto apply = [](UINT64 m, float sx, float sy, float sz) {
 		Vector3 r = GTAmemory::ReadVector3(m);
 		Vector3 f = GTAmemory::ReadVector3(m + 0x10);
@@ -664,7 +652,7 @@ void GTAentity::SetScale(Vector3 value)
 		if (drawPtr) apply(drawPtr + 0x20, value.x, value.y, value.z);
 	}
 
-	// Se l'entita' e' attaccata a mano, ricorda la nuova scala
+	// keep manual attach scale in sync
 	if (ManualAttachment* a = FindManualAttachment(mHandle)) a->scale = value;
 }
 
@@ -969,18 +957,18 @@ static void UpdateManualAttachmentsImpl()
 		MALog("Update:exists", a.child, a.parent);
 		if (!child.Exists() || !parent.Exists())
 		{
-			ReleaseManualAttachment(a.child); // rimuove la voce, non incrementare i
+			ReleaseManualAttachment(a.child); // entry gone, no i++
 			continue;
 		}
 
-		// Solo native (niente letture dirette della memoria del gioco)
+		// atox fixes: natives only, no direct memory reads
 		MALog("Update:parentRotation", a.child, a.parent);
 		Mat3 pr = EulerToMatrix(parent.GetRotation());
 		MALog("Update:position", a.child, a.parent);
 		Vector3 pos;
 		if (a.bone > 0)
 		{
-			// osso: posizione mondo dell'osso + offset ruotato con l'orientamento del genitore (approssimazione)
+			// bone world pos + offset rotated by parent (approx)
 			Vector3 bp = parent.GetBoneCoords(a.bone);
 			const Vector3& o = a.offset;
 			pos = Vector3(bp.x + pr.m[0][0] * o.x + pr.m[0][1] * o.y + pr.m[0][2] * o.z,
@@ -994,7 +982,7 @@ static void UpdateManualAttachmentsImpl()
 
 		Mat3 world = MulMat(pr, EulerToMatrix(a.rotation));
 		MALog("Update:setRotation", a.child, a.parent);
-		child.SetRotation(MatrixToEuler(world)); // SET_ENTITY_ROTATION ricostruisce la matrice: la scala va riapplicata dopo
+		child.SetRotation(MatrixToEuler(world)); // rotation resets matrix scale, reapply after
 		MALog("Update:setPosition", a.child, a.parent);
 		child.SetPosition(pos);
 		MALog("Update:setScale", a.child, a.parent);
@@ -1007,7 +995,7 @@ void GTAentity::UpdateManualAttachments()
 {
 	if (g_manualAttachments.empty()) return;
 	if (!RunGuarded([]() { UpdateManualAttachmentsImpl(); }))
-		HandleManualFailure("Eccezione in UpdateManualAttachments");
+		HandleManualFailure("Exception in UpdateManualAttachments");
 }
 
 void GTAentity::AttachTo(GTAentity entity, int boneIndex, bool collision)
