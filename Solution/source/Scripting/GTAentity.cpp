@@ -34,6 +34,7 @@
 #include <vector>
 #include <cmath>
 #include <cstdio>
+#include <Windows.h>
 
 namespace 
 {
@@ -46,14 +47,30 @@ namespace
 namespace
 {
 	// ---- DEBUG: scrive l'ultimo passaggio eseguito (sovrascrive il file ogni volta) ----
+	const char* g_lastStage = "";
+
 	void MALog(const char* stage, int a = 0, int b = 0)
 	{
-		FILE* f = nullptr;
-		if (fopen_s(&f, "Menyoo_attach_debug.log", "w") == 0 && f)
+		g_lastStage = stage;
+		// Scrive sia nella cartella corrente sia in una cartella sempre scrivibile
+		static const char* paths[] = { "Menyoo_attach_debug.log", "C:\\Users\\Public\\Menyoo_attach_debug.log" };
+		for (const char* path : paths)
 		{
-			fprintf(f, "%s | h1=%d h2=%d\n", stage, a, b);
-			fclose(f);
+			FILE* f = nullptr;
+			if (fopen_s(&f, path, "w") == 0 && f)
+			{
+				fprintf(f, "%s | h1=%d h2=%d\n", stage, a, b);
+				fclose(f);
+			}
 		}
+	}
+
+	// Esegue f() intercettando solo le access violation (senza oggetti da distruggere in questa funzione)
+	template <typename F>
+	bool RunGuarded(F&& f)
+	{
+		__try { f(); return true; }
+		__except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) { return false; }
 	}
 
 	// ---- Attach manuale (entita' scalate) ----
@@ -89,7 +106,7 @@ namespace
 			if (child.Exists())
 			{
 				child.SetIsCollisionEnabled(a.prevCollision);
-				child.FreezePosition(a.prevFrozen);
+				FREEZE_ENTITY_POSITION(a.child, a.prevFrozen);
 			}
 			return;
 		}
@@ -148,7 +165,7 @@ namespace
 
 	// Se l'entita' e' scalata la attacca "a mano" e ritorna true; altrimenti ritorna false
 	// e l'attach nativo prosegue normalmente.
-	bool TryAttachManually(GTAentity child, GTAentity parent, int bone, const Vector3& offset, const Vector3& rotation)
+	bool TryAttachManuallyImpl(GTAentity child, GTAentity parent, int bone, const Vector3& offset, const Vector3& rotation)
 	{
 		const int ch = child.GetHandle();
 		MALog("TryAttach:start", ch, parent.GetHandle());
@@ -191,9 +208,54 @@ namespace
 		MALog("TryAttach:collision", ch, parent.GetHandle());
 		child.SetIsCollisionEnabled(false);
 		MALog("TryAttach:freeze", ch, parent.GetHandle());
-		child.FreezePosition(true);
+		FREEZE_ENTITY_POSITION(child.GetHandle(), true);
 		MALog("TryAttach:done", ch, parent.GetHandle());
 		return true;
+	}
+
+	void WriteErrorLog(const char* msg)
+	{
+		static const char* paths[] = { "Menyoo_attach_error.log", "C:\\Users\\Public\\Menyoo_attach_error.log" };
+		for (const char* path : paths)
+		{
+			FILE* f = nullptr;
+			if (fopen_s(&f, path, "a") == 0 && f)
+			{
+				fprintf(f, "%s | ultimo passaggio: %s\n", msg, g_lastStage);
+				fclose(f);
+			}
+		}
+	}
+
+	bool g_manualAttachDisabled = false;
+
+	// Dopo un'eccezione: spegne l'attach manuale senza far cadere il gioco
+	void HandleManualFailure(const char* where)
+	{
+		WriteErrorLog(where);
+		g_manualAttachDisabled = true;
+		for (auto& a : g_manualAttachments)
+		{
+			int h = a.child;
+			bool pc = a.prevCollision;
+			bool pf = a.prevFrozen;
+			RunGuarded([&]() {
+				if (DOES_ENTITY_EXIST(h)) { SET_ENTITY_COLLISION(h, pc, false); FREEZE_ENTITY_POSITION(h, pf); }
+			});
+		}
+		g_manualAttachments.clear();
+	}
+
+	bool TryAttachManually(GTAentity child, GTAentity parent, int bone, const Vector3& offset, const Vector3& rotation)
+	{
+		if (g_manualAttachDisabled) return false;
+		bool result = false;
+		if (!RunGuarded([&]() { result = TryAttachManuallyImpl(child, parent, bone, offset, rotation); }))
+		{
+			HandleManualFailure("Eccezione in TryAttachManually");
+			return false;
+		}
+		return result;
 	}
 }
 
@@ -898,7 +960,7 @@ bool GTAentity::GetManualAttachParent(const GTAentity& child, GTAentity& parentO
 	return true;
 }
 
-void GTAentity::UpdateManualAttachments()
+static void UpdateManualAttachmentsImpl()
 {
 	for (size_t i = 0; i < g_manualAttachments.size(); )
 	{
@@ -911,17 +973,26 @@ void GTAentity::UpdateManualAttachments()
 			continue;
 		}
 
-		// La lettura diretta della matrice dell'osso puo' mandare in crash il gioco con un indice non valido:
-		// la uso solo se l'indice e' dentro il numero di ossi del genitore.
-		MALog("Update:boneCount", a.child, a.parent);
-		bool useBone = a.bone >= 0 && a.bone < parent.GetBoneCount();
-		MALog("Update:position", a.child, a.parent);
-		Vector3 pos = useBone ? parent.GetOffsetFromBoneInWorldCoords(a.bone, a.offset) : parent.GetOffsetInWorldCoords(a.offset);
-		if (useBone && pos.x == 0.0f && pos.y == 0.0f && pos.z == 0.0f)
-			pos = parent.GetOffsetInWorldCoords(a.offset); // osso non trovato
-
+		// Solo native (niente letture dirette della memoria del gioco)
 		MALog("Update:parentRotation", a.child, a.parent);
-		Mat3 world = MulMat(EulerToMatrix(parent.GetRotation()), EulerToMatrix(a.rotation));
+		Mat3 pr = EulerToMatrix(parent.GetRotation());
+		MALog("Update:position", a.child, a.parent);
+		Vector3 pos;
+		if (a.bone > 0)
+		{
+			// osso: posizione mondo dell'osso + offset ruotato con l'orientamento del genitore (approssimazione)
+			Vector3 bp = parent.GetBoneCoords(a.bone);
+			const Vector3& o = a.offset;
+			pos = Vector3(bp.x + pr.m[0][0] * o.x + pr.m[0][1] * o.y + pr.m[0][2] * o.z,
+			              bp.y + pr.m[1][0] * o.x + pr.m[1][1] * o.y + pr.m[1][2] * o.z,
+			              bp.z + pr.m[2][0] * o.x + pr.m[2][1] * o.y + pr.m[2][2] * o.z);
+		}
+		else
+		{
+			pos = parent.GetOffsetInWorldCoords(a.offset);
+		}
+
+		Mat3 world = MulMat(pr, EulerToMatrix(a.rotation));
 		MALog("Update:setRotation", a.child, a.parent);
 		child.SetRotation(MatrixToEuler(world)); // SET_ENTITY_ROTATION ricostruisce la matrice: la scala va riapplicata dopo
 		MALog("Update:setPosition", a.child, a.parent);
@@ -930,6 +1001,13 @@ void GTAentity::UpdateManualAttachments()
 		child.SetScale(a.scale);
 		++i;
 	}
+}
+
+void GTAentity::UpdateManualAttachments()
+{
+	if (g_manualAttachments.empty()) return;
+	if (!RunGuarded([]() { UpdateManualAttachmentsImpl(); }))
+		HandleManualFailure("Eccezione in UpdateManualAttachments");
 }
 
 void GTAentity::AttachTo(GTAentity entity, int boneIndex, bool collision)
