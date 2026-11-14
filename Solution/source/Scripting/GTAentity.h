@@ -209,6 +209,11 @@ public:
 	void AttachPhysicallyTo(GTAentity entity, int boneIndexDoer, int boneIndexGetter, float forceToBreak, Vector3 position1, Vector3 position2, Vector3 rotation);
 	void Detach();
 
+	// Attach manuale per entita' scalate: il motore nativo azzera la scala delle entita' attaccate,
+	// quindi queste vengono posizionate a mano ogni frame. Chiamare UpdateManualAttachments() ad ogni Tick.
+	static void UpdateManualAttachments();
+	static bool GetManualAttachParent(const GTAentity& child, GTAentity& parentOut);
+
 	GTAblip AddBlip();
 
 	void SetMass(float mass);
