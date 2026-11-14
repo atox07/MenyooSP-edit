@@ -916,6 +916,10 @@ namespace sub::Spooner
 			}
 			}
 			return false;*/
+			// Attach manuale (entita' scalate): il nativo GET_ENTITY_ATTACHED_TO non lo conosce e restituirebbe handle 0
+			if (GTAentity::GetManualAttachParent(from, to))
+				return true;
+
 			if (from.IsAttached())
 			{
 				to = GET_ENTITY_ATTACHED_TO(from.Handle());
