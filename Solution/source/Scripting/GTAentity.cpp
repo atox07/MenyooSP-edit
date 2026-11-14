@@ -140,6 +140,17 @@ namespace
 	{
 		const int ch = child.GetHandle();
 		if (ch == parent.GetHandle()) return false;
+		{
+			// Ciclo (il genitore dipende gia' dal figlio): attach ignorato, il nativo andrebbe in crash
+			int cur = parent.GetHandle();
+			for (int depth = 0; depth < 16; ++depth)
+			{
+				if (cur == ch) return true;
+				ManualAttachment* p = FindManualAttachment(cur);
+				if (!p) break;
+				cur = p->parent;
+			}
+		}
 		if (!IsScaledEntity(child))
 		{
 			ReleaseManualAttachment(ch); // non piu' scalata: torna all'attach nativo
@@ -873,8 +884,11 @@ void GTAentity::UpdateManualAttachments()
 			continue;
 		}
 
-		Vector3 pos = (a.bone == -1) ? parent.GetOffsetInWorldCoords(a.offset) : parent.GetOffsetFromBoneInWorldCoords(a.bone, a.offset);
-		if (a.bone != -1 && pos.x == 0.0f && pos.y == 0.0f && pos.z == 0.0f)
+		// La lettura diretta della matrice dell'osso puo' mandare in crash il gioco con un indice non valido:
+		// la uso solo se l'indice e' dentro il numero di ossi del genitore.
+		bool useBone = a.bone >= 0 && a.bone < parent.GetBoneCount();
+		Vector3 pos = useBone ? parent.GetOffsetFromBoneInWorldCoords(a.bone, a.offset) : parent.GetOffsetInWorldCoords(a.offset);
+		if (useBone && pos.x == 0.0f && pos.y == 0.0f && pos.z == 0.0f)
 			pos = parent.GetOffsetInWorldCoords(a.offset); // osso non trovato
 
 		Mat3 world = MulMat(EulerToMatrix(parent.GetRotation()), EulerToMatrix(a.rotation));
