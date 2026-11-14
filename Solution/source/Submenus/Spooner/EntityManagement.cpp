@@ -916,7 +916,7 @@ namespace sub::Spooner
 			}
 			}
 			return false;*/
-			// Attach manuale (entita' scalate): il nativo GET_ENTITY_ATTACHED_TO non lo conosce e restituirebbe handle 0
+			// atox fixes: native doesn't know manual attaches
 			if (GTAentity::GetManualAttachParent(from, to))
 				return true;
 
