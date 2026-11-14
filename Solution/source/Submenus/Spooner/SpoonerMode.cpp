@@ -438,7 +438,7 @@ namespace sub::Spooner
 			DrawSpoonerOverlays();
 			TickEntityTasks();
 			DrawSpoonerWorldItems();
-			GTAentity::UpdateManualAttachments();
+			GTAentity::UpdateManualAttachments(); // atox fixes
 			ApplyEntityScales();
 		}
 
