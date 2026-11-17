@@ -8,6 +8,7 @@
 * (at your option) any later version.
 */
 #include "VehicleOptions.h"
+#include "TrafficDirector.h"
 #include "VehicleModShop.h"
 #include "..\Menu\Keybinds.h"
 #include "..\Util\FileLogger.h"
@@ -117,6 +118,8 @@ namespace sub
 			AddTexter("CMOD_MOD_MNT", fixCarTexterVal, fixCarTexter, fixCar, fixCarPlus, fixCarMinus, true); // Fix & Wash
 			AddOptionDescription("Repairs the vehicle. Left/right chooses whether to keep dirt or open windows.");
 		}
+		AddOption("Traffic Director", null, nullFunc, SUB::TRAFFICDIRECTOR);
+		AddOptionDescription("Edit traffic paths, collector ranges, spawners and traffic block zones.");
 		AddOption("Vehicle Spawner", funnyVehicleFreezeOff, nullFunc, SUB::SPAWNVEHICLE);
 		AddOption("Menyoo Customs", vehicleMenuModShop, nullFunc, -1, true);
 		if (myVehicleModel.IsCargobob())

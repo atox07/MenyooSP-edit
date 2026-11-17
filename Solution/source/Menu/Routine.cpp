@@ -8,6 +8,7 @@
 * (at your option) any later version.
 */
 #include "Routine.h"
+#include "../Submenus/TrafficDirector.h"
 
 #include "..\macros.h"
 
@@ -3091,6 +3092,7 @@ static void TickSubsystems()
 	FreeCamMode::Tick();
 	sub::GhostRiderMode::Tick();
 	sub::VehicleAutoDrive::Tick();
+	TrafficDirector::Tick();
 	sub::GravityGun_catind::Tick();
 	MagnetGun::g_magnetGun.Tick();
 	g_spSnow.Tick();
