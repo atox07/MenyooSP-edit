@@ -4982,7 +4982,7 @@ namespace sub
 		{
 			AddTitle("Spawn Object");
 
-			AddOption("Spawn Static / Map Model (Anywhere)", null, nullFunc, SUB::SPOONER_SPAWN_STATIC_MODEL);
+			AddOption("Static Map Models", null, nullFunc, SUB::SPOONER_SPAWN_STATIC_MODEL);
 			AddOptionDescription("Spawn any static map model or CodeWalker prop from game archives at your coordinates, even far from its area.");
 
 			AddOption("Favourites", null, nullFunc, SUB::SPOONER_SPAWN_PROP_FAVOURITES);
@@ -5033,11 +5033,17 @@ namespace sub
 		{
 			AddTitle("Static Map Models");
 
+			if (g_isEnhanced || NETWORK_IS_SESSION_ACTIVE())
+			{
+				AddOption("Available in GTA V Legacy Story Mode", null);
+				return;
+			}
+
 			static std::string s_lastModelInput = "";
 
 			bool bSpawnPressed = false;
 			AddOption("Spawn Model (Name or Hash)", bSpawnPressed);
-			AddOptionDescription("Spawns any static map model from CodeWalker or archives anywhere at your position or crosshairs.");
+			AddOptionDescription("Attempts to spawn the model in front of you or at the Spooner camera crosshair.");
 			if (bSpawnPressed)
 			{
 				std::string input = Game::InputBox(s_lastModelInput, 64U, "Enter Model Name or Hash (Hex/Dec):");
@@ -5064,12 +5070,14 @@ namespace sub
 
 						StaticModelSpawner::SpawnStaticModel(h, cleanName, spawnPos, spawnRot, Settings::bSpawnDynamicProps, true);
 					}
+					else
+						Game::Print::ShowNotification("~r~Invalid model name or hash.");
 				}
 			}
 
 			bool bDiagPressed = false;
-			AddOption("Run 4-Step Diagnostic (Near vs Far)", bDiagPressed);
-			AddOptionDescription("Runs a 4-step diagnostic (RAGE registry, CDImage, Streamer, Instantiation) comparing near/far states and logs to menyoolog.txt.");
+			AddOption("Diagnose Model at Current Location", bDiagPressed);
+			AddOptionDescription("Run with the same hash near and far from its original area. Both reports are appended to menyooLog.txt.");
 			if (bDiagPressed)
 			{
 				std::string input = Game::InputBox(s_lastModelInput, 64U, "Enter Model Name or Hash to Diagnose:");
@@ -5082,14 +5090,16 @@ namespace sub
 					{
 						StaticModelSpawner::RunDiagnostic(h, cleanName, true);
 					}
+					else
+						Game::Print::ShowNotification("~r~Invalid model name or hash.");
 				}
 			}
 
-			AddToggle("Auto-Resolve Unstreamed Models", StaticModelSpawner::bAutoResolveUnstreamedModels);
-			AddOptionDescription("When enabled, Menyoo automatically resolves YTYP/IPL containers for map props when far from their zone.");
+			AddToggle("Try IPL Hints (Experimental)", StaticModelSpawner::bAutoResolveUnstreamedModels);
+			AddOptionDescription("Tries a known IPL based on the model name when the model is unavailable.");
 
 			AddToggle("Pin Spawned Static Models", StaticModelSpawner::bPinSpawnedStaticModels);
-			AddOptionDescription("Keeps streaming references active so spawned models do not despawn when moving away or closing menu.");
+			AddOptionDescription("Keeps a streaming request active for spawned models.");
 
 			AddToggle("Force Collision Loading", StaticModelSpawner::bForceCollisionLoad);
 			AddOptionDescription("Explicitly requests physics bounds for the model when spawning.");

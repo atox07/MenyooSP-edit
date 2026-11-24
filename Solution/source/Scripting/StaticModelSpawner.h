@@ -21,14 +21,7 @@ namespace StaticModelSpawner
 
 		// Step 1: RAGE Archetype Registry (CModelInfo / fwArchetypeManager)
 		bool archetypeFound = false;
-		uintptr_t archetypeAddress = 0;
 		int streamingIndex = -1;
-		uint16_t archetypePoolIndex = 0;
-		uint8_t modelType = 0; // 0 = Object, 1 = MLO, 2 = Time, 3 = Weapon, 4 = Vehicle, 5 = Ped, etc.
-		uint32_t flags = 0;
-		float radius = 0.0f;
-		float aabbMin[3] = { 0.0f, 0.0f, 0.0f };
-		float aabbMax[3] = { 0.0f, 0.0f, 0.0f };
 
 		// Step 2: CDImage & Validity Checks
 		bool isInCdImage = false;
@@ -42,11 +35,8 @@ namespace StaticModelSpawner
 
 		// Step 4: Object Instantiation (CREATE_OBJECT_NO_OFFSET)
 		int objectHandle = 0;
-		uintptr_t objectAddress = 0;
 		bool spawnSuccess = false;
 		std::string failureReason;
-
-		std::string resolvedIplOrYtyp;
 	};
 
 	// Runtime settings
@@ -61,7 +51,7 @@ namespace StaticModelSpawner
 	// Diagnostic function: compares RAGE registry, CDImage, Request, and CreateObject, logging every step separately
 	ModelDiagnosticResult RunDiagnostic(Hash modelHash, const std::string& modelName, bool createTestObject = true);
 
-	// Resolves the model from game archives (locates YTYP/IPL and forces the streamer to load/register it at runtime)
+	// Checks model availability and optionally tries an IPL hint for known name patterns.
 	bool EnsureModelReady(Hash modelHash, const std::string& modelName = "", uint32_t timeoutMs = 5000);
 
 	// Spawns the static model once streaming is verified ready, configuring flags and managing lifetime references
@@ -71,7 +61,7 @@ namespace StaticModelSpawner
 	std::string FindYtypOrIplForModel(Hash modelHash, const std::string& modelName);
 	void RegisterCustomMapping(const std::string& modelPrefixOrName, const std::string& iplOrYtyp);
 
-	// Pinned streaming reference manager (guarantees model never vanishes when moving away or closing menu)
+	// Tracks streaming requests held for spawned models and requested IPLs.
 	namespace PinnedManager
 	{
 		void PinModel(Hash modelHash);

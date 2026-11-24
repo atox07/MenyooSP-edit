@@ -6,6 +6,8 @@
     Exact tags produce their version without a suffix. Untagged commits append
     the number of commits since the tag. Stable tags increment the patch number
     and use an alpha prerelease suffix for development builds.
+    Checkouts without a reachable version tag use an untagged development
+    version that includes the current Git commit.
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\generate-version.ps1
@@ -58,10 +60,6 @@ function Get-VersionTag {
         }
     }
 
-    if ($reachableTags.Count -eq 0) {
-        throw 'No reachable Git tag matching v<major>.<minor>.<patch>[-prerelease] was found.'
-    }
-
     return $reachableTags | Sort-Object Height, Tag | Select-Object -First 1
 }
 
@@ -89,7 +87,15 @@ function Write-IfChanged([string]$Path, [string]$Content) {
 }
 
 $tag = Get-VersionTag
-$version = Get-GeneratedVersion $tag
+if ($null -ne $tag) {
+    $version = Get-GeneratedVersion $tag
+    $versionSource = "$($tag.Height) commits after $($tag.Tag)"
+} else {
+    $commit = Invoke-Git @('rev-parse', '--short=12', 'HEAD')
+    $version = "0.0.0-dev+g$commit"
+    $versionSource = 'untagged checkout'
+    Write-Warning "No reachable SemVer tag was found. Using $version."
+}
 $outputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
 
@@ -100,4 +106,4 @@ $header = @"
 "@ -replace "`r?`n", "`r`n"
 
 Write-IfChanged (Join-Path $outputDirectory 'Version.h') $header
-Write-Output "Version $version ($($tag.Height) commits after $($tag.Tag))"
+Write-Output "Version $version ($versionSource)"

@@ -1,5 +1,7 @@
 #include "StaticModelSpawner.h"
 
+#include "Game.h"
+#include "GTAped.h"
 #include "..\Natives\natives2.h"
 #include "..\Util\FileLogger.h"
 #include "..\Util\StringManip.h"
@@ -19,7 +21,7 @@ namespace StaticModelSpawner
 {
 	bool bAutoResolveUnstreamedModels = true;
 	bool bPinSpawnedStaticModels = true;
-	extern bool bForceCollisionLoad = true;
+	bool bForceCollisionLoad = true;
 	uint32_t g_StreamingTimeoutMs = 5000;
 
 	// Pinned streaming reference tracking
@@ -116,6 +118,12 @@ namespace StaticModelSpawner
 		return ss.str();
 	}
 
+	static bool IsModelPinned(Hash hash)
+	{
+		std::lock_guard<std::mutex> lock(s_pinnedMutex);
+		return s_pinnedModels.contains(hash);
+	}
+
 	Hash ParseModelInput(const std::string& input, std::string& outCleanName)
 	{
 		std::string str = input;
@@ -130,15 +138,21 @@ namespace StaticModelSpawner
 		}
 
 		// Hex notation: "0x1234ABCD" or "0X..."
-		if (str.size() > 2 && str[0] == '0' && (str[1] == 'x' || str[1] == 'X'))
+		if (str.size() >= 2 && str[0] == '0' && (str[1] == 'x' || str[1] == 'X'))
 		{
 			try
 			{
-				Hash h = static_cast<Hash>(std::stoul(str, nullptr, 16));
-				outCleanName = ToHexStr(h);
-				return h;
+				size_t parsed = 0;
+				const auto hash = std::stoul(str, &parsed, 16);
+				if (parsed == str.size())
+				{
+					outCleanName = ToHexStr(hash);
+					return hash;
+				}
 			}
 			catch (...) {}
+			outCleanName.clear();
+			return 0;
 		}
 
 		// Numeric decimal notation (positive or negative)
@@ -173,6 +187,8 @@ namespace StaticModelSpawner
 				}
 			}
 			catch (...) {}
+			outCleanName.clear();
+			return 0;
 		}
 
 		// Plain text string model name
@@ -352,20 +368,23 @@ namespace StaticModelSpawner
 			return true;
 		}
 
-		// 2. Archetype is missing: resolve asset from game archives without teleporting player
-		std::string resolvedTarget = FindYtypOrIplForModel(modelHash, modelName);
+		if (IS_MODEL_IN_CDIMAGE(modelHash))
+			return true;
+
+		// The prototype can try a likely IPL based on the model name.
+		std::string resolvedTarget = bAutoResolveUnstreamedModels ? FindYtypOrIplForModel(modelHash, modelName) : "";
 		if (!resolvedTarget.empty())
 		{
-			addlog(ige::LogType::LOG_INFO, "[StaticModelSpawner] Resolving model " + ToHexStr(modelHash) + " ('" + modelName + "') via asset container '" + resolvedTarget + "'...");
+			addlog(ige::LogType::LOG_INFO, "[StaticModelSpawner] Trying IPL hint '" + resolvedTarget + "' for model " + ToHexStr(modelHash) + " ('" + modelName + "').");
 			REQUEST_IPL(resolvedTarget.c_str());
 
 			DWORD startTime = GetTickCount();
 			while (GetTickCount() - startTime < timeoutMs)
 			{
 				pInfo = GetModelInfo ? GetModelInfo(modelHash, &streamingIndex) : nullptr;
-				if (pInfo != nullptr)
+				if (pInfo != nullptr || IS_MODEL_IN_CDIMAGE(modelHash))
 				{
-					addlog(ige::LogType::LOG_INFO, "[StaticModelSpawner] Streamer loaded container '" + resolvedTarget + "'. Archetype registered at 0x" + std::to_string((uintptr_t)pInfo) + " (slot " + std::to_string(streamingIndex) + ") in " + std::to_string(GetTickCount() - startTime) + "ms.");
+					addlog(ige::LogType::LOG_INFO, "[StaticModelSpawner] Model became available while waiting for IPL '" + resolvedTarget + "'.");
 					PinnedManager::PinIpl(resolvedTarget);
 					return true;
 				}
@@ -376,7 +395,7 @@ namespace StaticModelSpawner
 		}
 		else
 		{
-			addlog(ige::LogType::LOG_DEBUG, "[StaticModelSpawner] No matching IPL/YTYP mapping found for model " + ToHexStr(modelHash) + " ('" + modelName + "')");
+			addlog(ige::LogType::LOG_DEBUG, "[StaticModelSpawner] No IPL hint used for model " + ToHexStr(modelHash) + " ('" + modelName + "')");
 		}
 
 		// 3. Fallback: Check if CDImage has it directly or if it can be requested
@@ -399,46 +418,29 @@ namespace StaticModelSpawner
 		diag.playerPos = playerPed.GetPosition();
 
 		addlog(ige::LogType::LOG_INFO, "================================================================================");
-		addlog(ige::LogType::LOG_INFO, "[DIAGNOSTIC] Static Model Spawn Analysis for: '" + modelName + "' (" + ToHexStr(modelHash) + " / " + std::to_string(modelHash) + ")");
+		addlog(ige::LogType::LOG_INFO, "[DIAGNOSTIC] Static Model Spawn Analysis for: '" + modelName + "' (" + ToHexStr(modelHash) + " / " + std::to_string(modelHash) + "), game build " + ige::VersionString(GTAmemory::GetGameVersion()));
 		addlog(ige::LogType::LOG_INFO, "[DIAGNOSTIC] Player Position: X=" + std::to_string(diag.playerPos.x) + ", Y=" + std::to_string(diag.playerPos.y) + ", Z=" + std::to_string(diag.playerPos.z));
 		addlog(ige::LogType::LOG_INFO, "--------------------------------------------------------------------------------");
 
 		// STEP 1: Archetype in RAGE Registry (CModelInfo::GetModelInfo / fwArchetypeManager)
 		int streamingIndex = -1;
 		CBaseModelInfo* pInfo = GetModelInfo ? GetModelInfo(modelHash, &streamingIndex) : nullptr;
-		if (pInfo != nullptr)
+		if (!GetModelInfo)
+		{
+			addlog(ige::LogType::LOG_WARNING, "[STEP 1 - RAGE ARCHETYPE REGISTRY]: UNAVAILABLE (GetModelInfo signature not found)");
+		}
+		else if (pInfo != nullptr)
 		{
 			diag.archetypeFound = true;
-			diag.archetypeAddress = reinterpret_cast<uintptr_t>(pInfo);
 			diag.streamingIndex = streamingIndex;
-			diag.archetypePoolIndex = pInfo->m_index;
-			diag.modelType = pInfo->GetModelType();
-			diag.flags = pInfo->m_flags;
-			diag.radius = pInfo->m_radius;
-			diag.aabbMin[0] = pInfo->m_aabbMin[0];
-			diag.aabbMin[1] = pInfo->m_aabbMin[1];
-			diag.aabbMin[2] = pInfo->m_aabbMin[2];
-			diag.aabbMax[0] = pInfo->m_aabbMax[0];
-			diag.aabbMax[1] = pInfo->m_aabbMax[1];
-			diag.aabbMax[2] = pInfo->m_aabbMax[2];
-
 			addlog(ige::LogType::LOG_INFO, "[STEP 1 - RAGE ARCHETYPE REGISTRY]: FOUND (REGISTERED)");
-			addlog(ige::LogType::LOG_INFO, "  -> Address: 0x" + std::to_string(diag.archetypeAddress));
-			addlog(ige::LogType::LOG_INFO, "  -> Hash in Struct: " + ToHexStr(pInfo->m_hash));
-			addlog(ige::LogType::LOG_INFO, "  -> Streaming Slot Index: " + std::to_string(streamingIndex));
-			addlog(ige::LogType::LOG_INFO, "  -> Pool Index: " + std::to_string(diag.archetypePoolIndex));
-			addlog(ige::LogType::LOG_INFO, "  -> ModelType: " + std::to_string(diag.modelType) + (diag.modelType == 0 ? " (CObject / Prop)" : diag.modelType == 1 ? " (CBuilding / MLO)" : diag.modelType == 2 ? " (CTime)" : " (Other)"));
-			addlog(ige::LogType::LOG_INFO, "  -> Flags: 0x" + std::to_string(diag.flags));
-			addlog(ige::LogType::LOG_INFO, "  -> Bounding Radius: " + std::to_string(diag.radius));
-			addlog(ige::LogType::LOG_INFO, "  -> Bounding Box Min: (" + std::to_string(diag.aabbMin[0]) + ", " + std::to_string(diag.aabbMin[1]) + ", " + std::to_string(diag.aabbMin[2]) + ")");
-			addlog(ige::LogType::LOG_INFO, "  -> Bounding Box Max: (" + std::to_string(diag.aabbMax[0]) + ", " + std::to_string(diag.aabbMax[1]) + ", " + std::to_string(diag.aabbMax[2]) + ")");
+			addlog(ige::LogType::LOG_INFO, "  -> Lookup Index: " + std::to_string(streamingIndex));
 		}
 		else
 		{
 			diag.archetypeFound = false;
 			addlog(ige::LogType::LOG_INFO, "[STEP 1 - RAGE ARCHETYPE REGISTRY]: MISSING (NOT REGISTERED)");
 			addlog(ige::LogType::LOG_INFO, "  -> CModelInfo::GetModelInfo returned NULL.");
-			addlog(ige::LogType::LOG_INFO, "  -> Diagnosis: Model archetype is not in active fwArchetypeManager table. It belongs to an unstreamed YTYP map chunk.");
 		}
 
 		// STEP 2: IS_MODEL_IN_CDIMAGE & IS_MODEL_VALID
@@ -449,11 +451,12 @@ namespace StaticModelSpawner
 		addlog(ige::LogType::LOG_INFO, "  -> IS_MODEL_IN_CDIMAGE: " + std::string(diag.isInCdImage ? "TRUE (1)" : "FALSE (0)"));
 		addlog(ige::LogType::LOG_INFO, "  -> IS_MODEL_VALID: " + std::string(diag.isModelValid ? "TRUE (1)" : "FALSE (0)"));
 
-		// STEP 3: REQUEST_MODEL, HAS_MODEL_LOADED & COLLISION
+		// STEP 3: REQUEST_MODEL and HAS_MODEL_LOADED
 		addlog(ige::LogType::LOG_INFO, "--------------------------------------------------------------------------------");
 		addlog(ige::LogType::LOG_INFO, "[STEP 3 - STREAMING REQUEST & TIMEOUT]:");
+		addlog(ige::LogType::LOG_INFO, "  -> HAS_MODEL_LOADED before request: " + std::to_string(HAS_MODEL_LOADED(modelHash) != 0));
 		REQUEST_MODEL(modelHash);
-		REQUEST_COLLISION_FOR_MODEL(modelHash);
+		addlog(ige::LogType::LOG_INFO, "  -> REQUEST_MODEL invoked (void).");
 
 		DWORD startLoad = GetTickCount();
 		while (GetTickCount() - startLoad < 3000)
@@ -467,20 +470,7 @@ namespace StaticModelSpawner
 			scriptWait(0);
 		}
 
-		DWORD startColl = GetTickCount();
-		while (GetTickCount() - startColl < 1500)
-		{
-			if (HAS_COLLISION_FOR_MODEL_LOADED(modelHash))
-			{
-				diag.collisionLoaded = true;
-				diag.collisionLoadTimeMs = GetTickCount() - startColl;
-				break;
-			}
-			scriptWait(0);
-		}
-
 		addlog(ige::LogType::LOG_INFO, "  -> HAS_MODEL_LOADED: " + std::string(diag.modelLoaded ? ("SUCCESS (Loaded in " + std::to_string(diag.modelLoadTimeMs) + "ms)") : "FAILED (Timed out after 3000ms)"));
-		addlog(ige::LogType::LOG_INFO, "  -> HAS_COLLISION_FOR_MODEL_LOADED: " + std::string(diag.collisionLoaded ? ("SUCCESS (Loaded in " + std::to_string(diag.collisionLoadTimeMs) + "ms)") : "NOT LOADED / NO SEPARATE YBN BOUNDS"));
 
 		// STEP 4: CREATE_OBJECT_NO_OFFSET
 		addlog(ige::LogType::LOG_INFO, "--------------------------------------------------------------------------------");
@@ -488,21 +478,15 @@ namespace StaticModelSpawner
 		if (createTestObject && diag.modelLoaded)
 		{
 			Vector3 spawnPos = playerPed.GetOffsetInWorldCoords(0.0f, 3.5f, 0.0f);
-			int obj = CREATE_OBJECT_NO_OFFSET(modelHash, spawnPos.x, spawnPos.y, spawnPos.z, true, true, false);
-			if (obj == 0)
-			{
-				// Retry with dynamic = true
-				obj = CREATE_OBJECT(modelHash, spawnPos.x, spawnPos.y, spawnPos.z, true, true, true);
-			}
+			int obj = CREATE_OBJECT_NO_OFFSET(modelHash, spawnPos.x, spawnPos.y, spawnPos.z, false, true, false);
+			addlog(ige::LogType::LOG_INFO, "  -> CREATE_OBJECT_NO_OFFSET returned " + std::to_string(obj));
 
 			if (obj != 0)
 			{
 				diag.spawnSuccess = true;
 				diag.objectHandle = obj;
-				diag.objectAddress = reinterpret_cast<uintptr_t>(getScriptHandleBaseAddress(obj));
 				addlog(ige::LogType::LOG_INFO, "  -> CREATE_OBJECT_NO_OFFSET: SUCCESS");
 				addlog(ige::LogType::LOG_INFO, "  -> Object Handle: " + std::to_string(obj));
-				addlog(ige::LogType::LOG_INFO, "  -> Object Native Address: 0x" + std::to_string(diag.objectAddress));
 
 				// Cleanup temporary test object
 				SET_ENTITY_AS_MISSION_ENTITY(obj, true, true);
@@ -511,9 +495,7 @@ namespace StaticModelSpawner
 			else
 			{
 				diag.spawnSuccess = false;
-				diag.failureReason = (diag.modelType != 0)
-					? ("Model is loaded but Archetype Type is " + std::to_string(diag.modelType) + " (engine requires 0 for script CObject).")
-					: "Engine CREATE_OBJECT factory returned 0.";
+				diag.failureReason = "Model loaded, but the object factory returned 0.";
 				addlog(ige::LogType::LOG_ERROR, "  -> CREATE_OBJECT_NO_OFFSET: FAILED (" + diag.failureReason + ")");
 			}
 		}
@@ -524,19 +506,29 @@ namespace StaticModelSpawner
 			addlog(ige::LogType::LOG_WARNING, "  -> Spawn check skipped: " + diag.failureReason);
 		}
 
-		// Try resolving YTYP/IPL for recommendation
-		diag.resolvedIplOrYtyp = FindYtypOrIplForModel(modelHash, modelName);
-		if (!diag.resolvedIplOrYtyp.empty())
+		if (diag.modelLoaded)
 		{
-			addlog(ige::LogType::LOG_INFO, "--------------------------------------------------------------------------------");
-			addlog(ige::LogType::LOG_INFO, "[RESOLVER SUGGESTION]: Associated YTYP/IPL asset is '" + diag.resolvedIplOrYtyp + "'.");
+			REQUEST_COLLISION_FOR_MODEL(modelHash);
+			const DWORD startCollision = GetTickCount();
+			while (!HAS_COLLISION_FOR_MODEL_LOADED(modelHash) && GetTickCount() - startCollision < 1500)
+				scriptWait(0);
+			diag.collisionLoaded = HAS_COLLISION_FOR_MODEL_LOADED(modelHash) != 0;
+			diag.collisionLoadTimeMs = GetTickCount() - startCollision;
+			addlog(ige::LogType::LOG_INFO, "[COLLISION] HAS_COLLISION_FOR_MODEL_LOADED: " +
+				std::string(diag.collisionLoaded ? "TRUE" : "FALSE after timeout") +
+				" (model bounds only; test the spawned object's collision separately).");
 		}
+		else
+			addlog(ige::LogType::LOG_INFO, "[COLLISION] Skipped because the model did not load.");
+
+		if (!IsModelPinned(modelHash))
+			SET_MODEL_AS_NO_LONGER_NEEDED(modelHash);
 
 		addlog(ige::LogType::LOG_INFO, "================================================================================");
 
 		// On-screen notification summary
 		std::string notifyHeader = "Diagnostic: " + (modelName.empty() ? ToHexStr(modelHash) : modelName);
-		std::string notifyBody = "RAGE: " + std::string(diag.archetypeFound ? "~g~OK" : "~r~MISSING")
+		std::string notifyBody = "RAGE: " + std::string(!GetModelInfo ? "~y~UNAVAILABLE" : diag.archetypeFound ? "~g~OK" : "~r~MISSING")
 			+ " | CDImage: " + std::string(diag.isInCdImage ? "~g~YES" : "~r~NO")
 			+ "\nLoad: " + std::string(diag.modelLoaded ? "~g~READY" : "~r~FAIL")
 			+ " | Spawn: " + std::string(diag.spawnSuccess ? "~g~OK" : "~r~FAIL");
@@ -549,6 +541,11 @@ namespace StaticModelSpawner
 	int SpawnStaticModel(Hash modelHash, const std::string& modelName, const Vector3& position, const Vector3& rotation, bool dynamic, bool addToDb)
 	{
 		if (!modelHash) return 0;
+		if (addToDb && sub::Spooner::Databases::EntityDb.size() >= GTA_MAX_ENTITIES)
+		{
+			Game::Print::ShowNotification("~r~Spawn Error:", "Spooner entity limit reached.");
+			return 0;
+		}
 
 		// 1. Ensure archetype is registered in RAGE streamer
 		if (!EnsureModelReady(modelHash, modelName, g_StreamingTimeoutMs))
@@ -579,34 +576,31 @@ namespace StaticModelSpawner
 
 		if (!loaded)
 		{
+			if (!IsModelPinned(modelHash))
+				SET_MODEL_AS_NO_LONGER_NEEDED(modelHash);
 			addlog(ige::LogType::LOG_ERROR, "[StaticModelSpawner] Timed out waiting for HAS_MODEL_LOADED on " + ToHexStr(modelHash) + " ('" + modelName + "').");
 			Game::Print::ShowNotification("~r~Spawn Error:", "Streaming timed out while loading model " + (modelName.empty() ? ToHexStr(modelHash) : modelName));
 			return 0;
 		}
 
 		// 3. Create the object at target destination
-		int obj = CREATE_OBJECT_NO_OFFSET(modelHash, position.x, position.y, position.z, true, true, dynamic);
-		if (obj == 0)
-		{
-			// Fallback: try CREATE_OBJECT with dynamic
-			obj = CREATE_OBJECT(modelHash, position.x, position.y, position.z, true, true, dynamic);
-		}
+		int obj = CREATE_OBJECT_NO_OFFSET(modelHash, position.x, position.y, position.z, false, true, false);
 
 		if (obj == 0)
 		{
-			// Investigate reason: check archetype type
-			int streamingIdx = -1;
-			CBaseModelInfo* pInfo = GetModelInfo ? GetModelInfo(modelHash, &streamingIdx) : nullptr;
-			uint8_t mType = pInfo ? pInfo->GetModelType() : 255;
-			addlog(ige::LogType::LOG_ERROR, "[StaticModelSpawner] CREATE_OBJECT_NO_OFFSET failed for model " + ToHexStr(modelHash) + ". Model is loaded, but Archetype Type=" + std::to_string(mType) + " (0=Object).");
-			Game::Print::ShowNotification("~r~Spawn Error:", "Engine refused object creation. Archetype Type=" + std::to_string(mType));
+			if (!IsModelPinned(modelHash))
+				SET_MODEL_AS_NO_LONGER_NEEDED(modelHash);
+			addlog(ige::LogType::LOG_ERROR, "[StaticModelSpawner] CREATE_OBJECT_NO_OFFSET returned 0 after loading " + ToHexStr(modelHash));
+			Game::Print::ShowNotification("~r~Spawn Error:", "The model loaded, but the engine refused object creation.");
 			return 0;
 		}
 
 		// 4. Configure rotation and entity flags
 		SET_ENTITY_ROTATION(obj, rotation.x, rotation.y, rotation.z, 2, true);
 		SET_ENTITY_AS_MISSION_ENTITY(obj, true, true);
-		SET_ENTITY_LOAD_COLLISION_FLAG(obj, true);
+		if (bForceCollisionLoad)
+			SET_ENTITY_LOAD_COLLISION_FLAG(obj, true, 0);
+		SET_ENTITY_DYNAMIC(obj, dynamic);
 		FREEZE_ENTITY_POSITION(obj, !dynamic);
 		SET_ENTITY_LOD_DIST(obj, 1000000);
 
@@ -614,6 +608,10 @@ namespace StaticModelSpawner
 		if (bPinSpawnedStaticModels)
 		{
 			PinnedManager::PinModel(modelHash);
+		}
+		else if (!IsModelPinned(modelHash))
+		{
+			SET_MODEL_AS_NO_LONGER_NEEDED(modelHash);
 		}
 
 		// 6. Register into Spooner entity database if requested
