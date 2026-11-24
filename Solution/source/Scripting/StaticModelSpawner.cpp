@@ -2,6 +2,7 @@
 
 #include "Game.h"
 #include "GTAped.h"
+#include "StaticArchetypeStreaming.h"
 #include "..\Natives\natives2.h"
 #include "..\Util\FileLogger.h"
 #include "..\Util\StringManip.h"
@@ -267,6 +268,7 @@ namespace StaticModelSpawner
 				{
 					s_pinnedModels.erase(it);
 					SET_MODEL_AS_NO_LONGER_NEEDED(modelHash);
+					StaticArchetypeStreaming::Release(modelHash);
 					addlog(ige::LogType::LOG_DEBUG, "[StaticModelSpawner] Unpinned and released model " + ToHexStr(modelHash));
 				}
 			}
@@ -343,7 +345,8 @@ namespace StaticModelSpawner
 			}
 			s_pinnedModels.clear();
 			s_pinnedIpls.clear();
-			addlog(ige::LogType::LOG_INFO, "[StaticModelSpawner] All pinned models and IPLs cleared.");
+			StaticArchetypeStreaming::Clear();
+			addlog(ige::LogType::LOG_INFO, "[StaticModelSpawner] Pinned models, IPLs and YTYP references cleared.");
 		}
 
 		std::vector<std::pair<Hash, int>> GetPinnedModelsList()
@@ -547,8 +550,12 @@ namespace StaticModelSpawner
 			return 0;
 		}
 
-		// 1. Ensure archetype is registered in RAGE streamer
-		if (!EnsureModelReady(modelHash, modelName, g_StreamingTimeoutMs))
+		int registryIndex = -1;
+		const bool alreadyAvailable = IS_MODEL_IN_CDIMAGE(modelHash) ||
+			(GetModelInfo && GetModelInfo(modelHash, &registryIndex));
+		const bool resolvedYtyp = !alreadyAvailable && bAutoResolveUnstreamedModels &&
+			StaticArchetypeStreaming::Resolve(modelHash, 15000);
+		if (!alreadyAvailable && !resolvedYtyp && !EnsureModelReady(modelHash, modelName, g_StreamingTimeoutMs))
 		{
 			addlog(ige::LogType::LOG_ERROR, "[StaticModelSpawner] Failed to resolve and register archetype for model " + ToHexStr(modelHash) + " ('" + modelName + "').");
 			Game::Print::ShowNotification("~r~Spawn Error:", "Model " + (modelName.empty() ? ToHexStr(modelHash) : modelName) + " could not be resolved in game streaming.");
@@ -576,6 +583,8 @@ namespace StaticModelSpawner
 
 		if (!loaded)
 		{
+			if (resolvedYtyp)
+				StaticArchetypeStreaming::Release(modelHash);
 			if (!IsModelPinned(modelHash))
 				SET_MODEL_AS_NO_LONGER_NEEDED(modelHash);
 			addlog(ige::LogType::LOG_ERROR, "[StaticModelSpawner] Timed out waiting for HAS_MODEL_LOADED on " + ToHexStr(modelHash) + " ('" + modelName + "').");
@@ -588,6 +597,8 @@ namespace StaticModelSpawner
 
 		if (obj == 0)
 		{
+			if (resolvedYtyp)
+				StaticArchetypeStreaming::Release(modelHash);
 			if (!IsModelPinned(modelHash))
 				SET_MODEL_AS_NO_LONGER_NEEDED(modelHash);
 			addlog(ige::LogType::LOG_ERROR, "[StaticModelSpawner] CREATE_OBJECT_NO_OFFSET returned 0 after loading " + ToHexStr(modelHash));
@@ -604,8 +615,8 @@ namespace StaticModelSpawner
 		FREEZE_ENTITY_POSITION(obj, !dynamic);
 		SET_ENTITY_LOD_DIST(obj, 1000000);
 
-		// 5. Pin streaming reference if enabled (prevents game culling)
-		if (bPinSpawnedStaticModels)
+		// Hold the model while its streamed archetype has a live copy.
+		if (bPinSpawnedStaticModels || resolvedYtyp || IsModelPinned(modelHash))
 		{
 			PinnedManager::PinModel(modelHash);
 		}
@@ -623,6 +634,9 @@ namespace StaticModelSpawner
 			newEnt.type = EntityType::PROP;
 			newEnt.hashName = modelName.empty() ? ToHexStr(modelHash) : modelName;
 			newEnt.dynamic = dynamic;
+			Vector3_t minimum{}, maximum{};
+			GET_MODEL_DIMENSIONS(modelHash, &minimum, &maximum);
+			newEnt.pickingBounds = SpoonerEntity::PickingBounds{ minimum, maximum };
 			EntityManagement::AddEntityToDb(newEnt);
 		}
 

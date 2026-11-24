@@ -5095,8 +5095,8 @@ namespace sub
 				}
 			}
 
-			AddToggle("Try IPL Hints (Experimental)", StaticModelSpawner::bAutoResolveUnstreamedModels);
-			AddOptionDescription("Tries a known IPL based on the model name when the model is unavailable.");
+			AddToggle("Resolve Missing Archetypes (Experimental)", StaticModelSpawner::bAutoResolveUnstreamedModels);
+			AddOptionDescription("Searches the installed YTYP packages on Legacy 3889, then tries a known IPL hint.");
 
 			AddToggle("Pin Spawned Static Models", StaticModelSpawner::bPinSpawnedStaticModels);
 			AddOptionDescription("Keeps a streaming request active for spawned models.");
@@ -5110,7 +5110,7 @@ namespace sub
 
 			bool bClearPinned = false;
 			AddOption("Clear All Pinned Streaming References", bClearPinned);
-			AddOptionDescription("Releases all pinned streaming models and IPLs from memory.");
+			AddOptionDescription("Releases held model, IPL and YTYP streaming references.");
 			if (bClearPinned)
 			{
 				StaticModelSpawner::PinnedManager::ClearAll();

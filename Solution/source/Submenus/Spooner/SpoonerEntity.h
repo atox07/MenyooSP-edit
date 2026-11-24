@@ -14,6 +14,7 @@
 
 #include "SpoonerTaskSequence.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,11 +34,13 @@ namespace sub::Spooner
 			bool lockPos;
 		};
 		struct Attachment { bool isAttached; int boneIndex; Vector3 offset, rotation; };
+		struct PickingBounds { Vector3 minimum, maximum; };
 
 		GTAentity handle;
 		EntityType type;
 		std::string hashName;
 		bool dynamic;
+		std::optional<PickingBounds> pickingBounds;
 		//bool Door;
 		std::vector<SpoonerEntity::Animation> lastAnimations;
 		std::string currentScenario;

@@ -53,6 +53,7 @@ namespace sub::Spooner
 		this->type = (EntityType)right.type;
 		this->hashName = right.hashName;
 		this->dynamic = right.dynamic;
+		this->pickingBounds = right.pickingBounds;
 		this->lastAnimations = right.lastAnimations;
 		this->currentScenario = right.currentScenario;
 		this->attachmentArgs.isAttached = right.attachmentArgs.isAttached;

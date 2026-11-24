@@ -4,6 +4,7 @@
 #include "SpoonerMode.h"
 #include "SpoonerSettings.h"
 #include "SpoonerEntity.h"
+#include "Databases.h"
 #include "EntityManagement.h"
 #include "Submenus.h"
 #include "..\PedComponentChanger.h"
@@ -14,9 +15,12 @@
 #include "..\..\Scripting\Game.h"
 #include "..\..\Scripting\GTAentity.h"
 #include "..\..\Scripting\Model.h"
+#include "..\..\Scripting\Raycast.h"
 #include "..\..\Scripting\enums.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <string>
 #include <math.h>
 
@@ -59,11 +63,83 @@ namespace sub::Spooner::SpoonerCursor
 			return GTAentity(state.draggedEntityHandle);
 		}
 
+		float IntersectPickingBounds(const SpoonerEntity& entity, const Vector3& origin, const Vector3& direction)
+		{
+			const auto& bounds = *entity.pickingBounds;
+			const float minimum[] = { bounds.minimum.x, bounds.minimum.y, bounds.minimum.z };
+			const float maximum[] = { bounds.maximum.x, bounds.maximum.y, bounds.maximum.z };
+			const float noHit = std::numeric_limits<float>::infinity();
+			if (bounds.minimum == bounds.maximum)
+				return noHit;
+
+			Vector3_t forward{}, right{}, up{}, position{};
+			GET_ENTITY_MATRIX(entity.handle.GetHandle(), &forward, &right, &up, &position);
+			const Vector3 axes[] = { right, forward, up };
+			const Vector3 offset = origin - Vector3(position);
+
+			float entry = -noHit;
+			float exit = noHit;
+			for (int axis = 0; axis < 3; ++axis)
+			{
+				const auto& basis = axes[axis];
+				const float lengthSquared = Vector3::Dot(basis, basis);
+				if (lengthSquared <= 0.000001f || !std::isfinite(lengthSquared) ||
+					!std::isfinite(minimum[axis]) || !std::isfinite(maximum[axis]) || minimum[axis] > maximum[axis])
+					return noHit;
+
+				// Project into model space while preserving the ray's world-space distance.
+				const float localOrigin = Vector3::Dot(offset, basis) / lengthSquared;
+				const float localDirection = Vector3::Dot(direction, basis) / lengthSquared;
+				if (std::abs(localDirection) < 0.000001f)
+				{
+					if (localOrigin < minimum[axis] || localOrigin > maximum[axis])
+						return noHit;
+					continue;
+				}
+
+				float nearFace = (minimum[axis] - localOrigin) / localDirection;
+				float farFace = (maximum[axis] - localOrigin) / localDirection;
+				if (nearFace > farFace)
+					std::swap(nearFace, farFace);
+				entry = (std::max)(entry, nearFace);
+				exit = (std::min)(exit, farFace);
+				if (entry > exit || exit < 0.0f)
+					return noHit;
+			}
+
+			// Inside the box, use the exit face so closer real hits still take priority.
+			return entry >= 0.0f ? entry : exit;
+		}
+
 		GTAentity GetHoveredEntity()
 		{
-			return ShouldDraw()
-				? SpoonerCamera::camera.RaycastForEntity(Vector2(0.0f, 0.0f), 0, 160.0f)
-				: GTAentity();
+			if (!ShouldDraw())
+				return GTAentity();
+
+			const auto& camera = SpoonerCamera::camera;
+			const Vector3 direction = camera.GetDirectionFromScreenCentre();
+			const Vector3 origin = camera.GetPosition() + direction;
+			constexpr float rayLength = 159.0f;
+			// Match Camera::RaycastForEntity, keeping the surface hit to test occlusion.
+			const auto hit = RaycastResult::Raycast(origin, direction, rayLength, IntersectOptions(287));
+			GTAentity hovered = hit.HitEntity();
+			float closest = hit.DidHitAnything()
+				? (std::max)(0.0f, Vector3::Dot(hit.HitCoords() - origin, direction))
+				: rayLength;
+
+			for (const auto& entity : Databases::EntityDb)
+			{
+				if (!entity.pickingBounds || !entity.handle.Exists() || !entity.handle.IsVisible())
+					continue;
+
+				const float distance = IntersectPickingBounds(entity, origin, direction);
+				if (distance < closest)
+				{
+					closest = distance;
+					hovered = entity.handle;
+				}
+			}
+			return hovered;
 		}
 
 		GTAentity GetTargetEntity(const GTAentity& hoveredEntity)
