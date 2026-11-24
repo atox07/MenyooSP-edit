@@ -105,6 +105,7 @@ namespace sub
 
 		void Sub_SpawnCategories();
 		void Sub_SpawnProp();
+		void Sub_SpawnStaticModel();
 		void Sub_SpawnProp_Favourites();
 		void Sub_SpawnProp_Favourites_CatSelect();
 		void Sub_SpawnPed();

@@ -48,11 +48,10 @@ MODULEINFO g_MainModuleInfo = { 0 };
 ScriptTable* scriptTable;
 ScriptHeader* shopController;
 
-typedef CVehicleModelInfo* (*GetModelInfo_t)(unsigned int modelHash, int* index);
 typedef CVehicleModelInfo* (*InitVehicleArchetype_t)(const char*, bool, unsigned int);
 typedef CVehicleModelInfo* (*InitVehicleArchetypeEnhanced_t)(uint32_t, const char*);
 
-GetModelInfo_t GetModelInfo;
+GetModelInfo_t GetModelInfo = nullptr;
 
 std::unordered_map<unsigned int, std::string> g_vehicleHashes;
 CallHook<InitVehicleArchetype_t>* g_InitVehicleArchetype = nullptr;

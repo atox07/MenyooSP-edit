@@ -142,6 +142,9 @@ protected:
 	void* m_0x00A8;        // 0x00A8
 };
 
+typedef CBaseModelInfo* (*GetModelInfo_t)(unsigned int modelHash, int* index);
+extern GetModelInfo_t GetModelInfo;
+
 class CVehicleModelInfo : public CBaseModelInfo
 {
 public:

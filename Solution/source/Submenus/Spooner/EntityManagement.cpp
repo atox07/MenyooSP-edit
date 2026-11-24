@@ -28,6 +28,7 @@
 #include "..\..\Scripting\ModelNames.h"
 #include "..\..\Scripting\enums.h"
 #include "..\..\Scripting\Camera.h"
+#include "..\..\Scripting\StaticModelSpawner.h"
 
 #include "..\PedAnimation.h"
 #include "..\PedComponentChanger.h"
@@ -132,6 +133,10 @@ namespace sub::Spooner
 			RemoveEntityFromDb(ent); // Remove this from db
 			handle.Detach(); // Detach this
 			//GTAblip(handle.CurrentBlip()).Remove();
+			if (ent.type == EntityType::PROP && handle.Exists())
+			{
+				StaticModelSpawner::PinnedManager::UnpinModel(handle.Model().hash);
+			}
 			handle.Delete(handle != PLAYER_PED_ID() && handle != g_myVeh);
 		}
 		void DeleteAllEntitiesInDb()
@@ -295,9 +300,14 @@ namespace sub::Spooner
 				addlog(ige::LogType::LOG_WARNING, "Failed to add prop, max spawn count " + std::to_string(GTA_MAX_ENTITIES) + " Reached");
 				return SpoonerEntity();
 			}
+			const std::string& mdlnme = name.empty() ? get_prop_model_label(model) : name;
+			if (!model.IsInCdImage() && StaticModelSpawner::bAutoResolveUnstreamedModels)
+			{
+				StaticModelSpawner::EnsureModelReady(model.hash, mdlnme);
+			}
+
 			if (!model.IsInCdImage())
 			{
-				const std::string& mdlnme = get_prop_model_label(model);
 				std::string suggestedLocation = "NO SUGGESTED LOCATIONS";
 				if (!mdlnme.empty())
 				{
@@ -393,6 +403,10 @@ namespace sub::Spooner
 			}
 
 			SET_NETWORK_ID_CAN_MIGRATE(OBJ_TO_NET(newEntity.handle.Handle()), true);
+			if (StaticModelSpawner::bPinSpawnedStaticModels)
+			{
+				StaticModelSpawner::PinnedManager::PinModel(model.hash);
+			}
 			newEntity.handle.SetDynamic(false);
 			newEntity.handle.FreezePosition(true);
 			newEntity.handle.FreezePosition(bFreezePos);

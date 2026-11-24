@@ -26,6 +26,7 @@
 #include "..\Scripting\enums.h"
 #include "..\Natives\natives2.h"
 #include "..\Memory\GTAmemory.h"
+#include "StaticModelSpawner.h"
 #include "GTAblip.h"
 #include "Checkpoint.h"
 #include "Camera.h"
@@ -488,6 +489,11 @@ namespace World
 
 	GTAprop CreateProp(GTAmodel::Model model, Vector3 position, bool dynamic, bool placeOnGround)
 	{
+		if (!model.IsInCdImage() && StaticModelSpawner::bAutoResolveUnstreamedModels)
+		{
+			StaticModelSpawner::EnsureModelReady(model.hash, "");
+		}
+
 		if (!model.IsInCdImage()) return 0;
 
 		if (placeOnGround)

@@ -26,6 +26,7 @@
 #include "..\..\Scripting\Game.h"
 #include "..\..\Scripting\World.h"
 #include "..\..\Memory\GTAmemory.h"
+#include "..\..\Scripting\StaticModelSpawner.h"
 #include "..\..\Util\ExePath.h"
 #include "..\..\Util\StringManip.h"
 #include "..\..\Menu\FolderPreviewBmps.h"
@@ -4981,6 +4982,9 @@ namespace sub
 		{
 			AddTitle("Spawn Object");
 
+			AddOption("Spawn Static / Map Model (Anywhere)", null, nullFunc, SUB::SPOONER_SPAWN_STATIC_MODEL);
+			AddOptionDescription("Spawn any static map model or CodeWalker prop from game archives at your coordinates, even far from its area.");
+
 			AddOption("Favourites", null, nullFunc, SUB::SPOONER_SPAWN_PROP_FAVOURITES);
 			bool bOpenObjectSearch = false;
 			AddOption("Search Objects", bOpenObjectSearch, nullFunc, SUB::OBJECTSPAWNER_SEARCH);
@@ -5023,6 +5027,85 @@ namespace sub
 				EntityManagement::InputEntityIntoDb(EntityType::PROP);
 			}
 
+		}
+
+		void Sub_SpawnStaticModel()
+		{
+			AddTitle("Static Map Models");
+
+			static std::string s_lastModelInput = "";
+
+			bool bSpawnPressed = false;
+			AddOption("Spawn Model (Name or Hash)", bSpawnPressed);
+			AddOptionDescription("Spawns any static map model from CodeWalker or archives anywhere at your position or crosshairs.");
+			if (bSpawnPressed)
+			{
+				std::string input = Game::InputBox(s_lastModelInput, 64U, "Enter Model Name or Hash (Hex/Dec):");
+				if (!input.empty())
+				{
+					s_lastModelInput = input;
+					std::string cleanName;
+					Hash h = StaticModelSpawner::ParseModelInput(input, cleanName);
+					if (h != 0)
+					{
+						GTAped playerPed = PLAYER_PED_ID();
+						Vector3 spawnPos;
+						Vector3 spawnRot(0.0f, 0.0f, playerPed.GetHeading());
+						auto& spoocam = SpoonerCamera::camera;
+						if (spoocam.IsActive())
+						{
+							spawnPos = spoocam.RaycastForCoord(Vector2(0.0f, 0.0f), 0, 120.0f, 15.0f);
+							spawnRot.z = spoocam.GetRotation().z;
+						}
+						else
+						{
+							spawnPos = playerPed.GetOffsetInWorldCoords(0.0f, 4.0f, 0.0f);
+						}
+
+						StaticModelSpawner::SpawnStaticModel(h, cleanName, spawnPos, spawnRot, Settings::bSpawnDynamicProps, true);
+					}
+				}
+			}
+
+			bool bDiagPressed = false;
+			AddOption("Run 4-Step Diagnostic (Near vs Far)", bDiagPressed);
+			AddOptionDescription("Runs a 4-step diagnostic (RAGE registry, CDImage, Streamer, Instantiation) comparing near/far states and logs to menyoolog.txt.");
+			if (bDiagPressed)
+			{
+				std::string input = Game::InputBox(s_lastModelInput, 64U, "Enter Model Name or Hash to Diagnose:");
+				if (!input.empty())
+				{
+					s_lastModelInput = input;
+					std::string cleanName;
+					Hash h = StaticModelSpawner::ParseModelInput(input, cleanName);
+					if (h != 0)
+					{
+						StaticModelSpawner::RunDiagnostic(h, cleanName, true);
+					}
+				}
+			}
+
+			AddToggle("Auto-Resolve Unstreamed Models", StaticModelSpawner::bAutoResolveUnstreamedModels);
+			AddOptionDescription("When enabled, Menyoo automatically resolves YTYP/IPL containers for map props when far from their zone.");
+
+			AddToggle("Pin Spawned Static Models", StaticModelSpawner::bPinSpawnedStaticModels);
+			AddOptionDescription("Keeps streaming references active so spawned models do not despawn when moving away or closing menu.");
+
+			AddToggle("Force Collision Loading", StaticModelSpawner::bForceCollisionLoad);
+			AddOptionDescription("Explicitly requests physics bounds for the model when spawning.");
+
+			size_t pinnedCount = StaticModelSpawner::PinnedManager::GetPinnedModelCount();
+			size_t pinnedIplCount = StaticModelSpawner::PinnedManager::GetPinnedIplCount();
+			AddOption("Active Pinned Models: " + std::to_string(pinnedCount) + " | IPLs: " + std::to_string(pinnedIplCount), null);
+
+			bool bClearPinned = false;
+			AddOption("Clear All Pinned Streaming References", bClearPinned);
+			AddOptionDescription("Releases all pinned streaming models and IPLs from memory.");
+			if (bClearPinned)
+			{
+				StaticModelSpawner::PinnedManager::ClearAll();
+				Game::Print::ShowNotification("Static Models:", "Cleared all pinned streaming references.");
+			}
 		}
 
 		void RebuildFavPropCache(const std::string& searchStr)
@@ -6010,6 +6093,7 @@ REGISTER_SUBMENU(ENTITYALPHALEVEL,     									sub::EntityAlphaLevelSub_)
 REGISTER_SUBMENU(SPOONER_MAIN,                                        	sub::Spooner::Submenus::Sub_SpoonerMain)
 REGISTER_SUBMENU(SPOONER_SPAWN_CATEGORIES,                            	sub::Spooner::Submenus::Sub_SpawnCategories)
 REGISTER_SUBMENU(SPOONER_SPAWN_PROP,                                  	sub::Spooner::Submenus::Sub_SpawnProp)
+REGISTER_SUBMENU(SPOONER_SPAWN_STATIC_MODEL,                         	sub::Spooner::Submenus::Sub_SpawnStaticModel)
 REGISTER_SUBMENU(SPOONER_SPAWN_PROP_FAVOURITES,                       	sub::Spooner::Submenus::Sub_SpawnProp_Favourites)
 REGISTER_SUBMENU(SPOONER_SPAWN_PROP_FAVOURITES_CATSELECT,             	sub::Spooner::Submenus::Sub_SpawnProp_Favourites_CatSelect)
 REGISTER_SUBMENU(SPOONER_SPAWN_PED,                                   	sub::Spooner::Submenus::Sub_SpawnPed)
