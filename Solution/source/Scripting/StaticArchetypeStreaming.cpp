@@ -23,6 +23,7 @@ namespace StaticArchetypeStreaming
 
 		using ModuleLookup = void* (*)(void*, const char*);
 		using Request = void (*)(void*, uint32_t, int);
+		using LoadObjectsNow = void (*)(bool);
 		using ReleaseRequest = bool (*)(void*, uint32_t);
 		using ChangeRef = void (*)(void*, uint32_t);
 
@@ -32,6 +33,7 @@ namespace StaticArchetypeStreaming
 			void* manager = nullptr;
 			void* module = nullptr;
 			Request request = nullptr;
+			LoadObjectsNow loadObjectsNow = nullptr;
 			ReleaseRequest releaseRequest = nullptr;
 			ChangeRef addRef = nullptr;
 			ChangeRef removeRef = nullptr;
@@ -49,6 +51,7 @@ namespace StaticArchetypeStreaming
 		};
 
 		std::unordered_map<Hash, RetainedBatch> retainedBatches;
+		std::unordered_map<Hash, uint32_t> nextSearchSlot;
 
 		template<typename T>
 		T ReadAt(const void* base, size_t offset)
@@ -71,7 +74,10 @@ namespace StaticArchetypeStreaming
 			constexpr unsigned char requestBytes[] = { 0x89, 0x54, 0x24, 0x10, 0x55, 0x53, 0x56, 0x57 };
 			constexpr unsigned char releaseBytes[] = { 0x48, 0x89, 0x5C, 0x24, 0x18, 0x89, 0x54, 0x24, 0x10 };
 			constexpr unsigned char moduleManagerLea[] = { 0x48, 0x8D, 0x0D, 0xCF, 0xBE, 0x80, 0x01 };
+			// b3889: RequestObject, xor ecx, ecx, call LoadObjectsNow.
+			constexpr unsigned char requestAndLoad[] = { 0xE8, 0x37, 0xE1, 0x24, 0x01, 0x33, 0xC9, 0xE8, 0x38, 0x27, 0x3B, 0x00 };
 			if (std::memcmp(image + 0x169410C, lookupBytes, sizeof(lookupBytes)) ||
+				std::memcmp(image + 0x452268, requestAndLoad, sizeof(requestAndLoad)) ||
 				std::memcmp(image + 0x16A03A4, requestBytes, sizeof(requestBytes)) ||
 				std::memcmp(image + 0x169F210, releaseBytes, sizeof(releaseBytes)) ||
 				std::memcmp(image + 0x16966B2, moduleManagerLea, sizeof(moduleManagerLea)))
@@ -89,6 +95,7 @@ namespace StaticArchetypeStreaming
 				return false;
 
 			out.request = reinterpret_cast<Request>(image + 0x16A03A4);
+			out.loadObjectsNow = reinterpret_cast<LoadObjectsNow>(image + 0x8049AC);
 			out.releaseRequest = reinterpret_cast<ReleaseRequest>(image + 0x169F210);
 			out.addRef = reinterpret_cast<ChangeRef>(methods[0xB0 / 8]);
 			out.removeRef = reinterpret_cast<ChangeRef>(methods[0xB8 / 8]);
@@ -128,9 +135,12 @@ namespace StaticArchetypeStreaming
 		}
 
 		const ULONGLONG deadline = GetTickCount64() + timeoutMs;
-		uint32_t cursor = 0;
+		uint32_t cursor = nextSearchSlot[hash];
+		if (cursor >= store.slotCount)
+			cursor = 0;
 		uint32_t requested = 0;
-		addlog(ige::LogType::LOG_INFO, "[YTYP] Searching installed packages for archetype " + std::to_string(hash));
+		uint32_t completed = 0;
+		addlog(ige::LogType::LOG_INFO, "[YTYP] Searching for " + std::to_string(hash) + " from slot " + std::to_string(cursor));
 		while (cursor < store.slotCount && GetTickCount64() < deadline)
 		{
 			RetainedBatch batch;
@@ -147,21 +157,17 @@ namespace StaticArchetypeStreaming
 			if (!batch.count)
 				break;
 
-			const ULONGLONG batchDeadline = (std::min)(deadline, GetTickCount64() + 500);
-			do
-			{
-				if (IsAvailable(hash) || std::all_of(batch.slots.begin(), batch.slots.begin() + batch.count,
-					[&store](uint32_t slot) { return State(store, slot) == 1; }))
-					break;
-				scriptWait(0);
-			} while (GetTickCount64() < batchDeadline);
+			store.loadObjectsNow(false);
 
 			const bool available = IsAvailable(hash);
 			RetainedBatch loaded;
 			for (uint32_t i = 0; i < batch.count; ++i)
 			{
 				const auto slot = batch.slots[i];
-				if (available && State(store, slot) == 1)
+				const bool ready = State(store, slot) == 1;
+				if (ready)
+					++completed;
+				if (available && ready)
 				{
 					store.addRef(store.module, slot);
 					loaded.slots[loaded.count++] = slot;
@@ -173,6 +179,7 @@ namespace StaticArchetypeStreaming
 			if (available && loaded.count && IsAvailable(hash))
 			{
 				retainedBatches.emplace(hash, loaded);
+				nextSearchSlot.erase(hash);
 				addlog(ige::LogType::LOG_INFO, "[YTYP] Archetype " + std::to_string(hash) + " available after " + std::to_string(requested) + " package requests.");
 				return true;
 			}
@@ -182,9 +189,17 @@ namespace StaticArchetypeStreaming
 				store.releaseRequest(store.manager, store.baseIndex + slot);
 				store.removeRef(store.module, slot);
 			}
+			scriptWait(0);
 		}
 
-		addlog(ige::LogType::LOG_WARNING, "[YTYP] Archetype " + std::to_string(hash) + " unresolved after " + std::to_string(requested) + " package requests.");
+		if (cursor < store.slotCount)
+			nextSearchSlot[hash] = cursor;
+		else
+			nextSearchSlot.erase(hash);
+		addlog(ige::LogType::LOG_WARNING, "[YTYP] Archetype " + std::to_string(hash) +
+			": loaded " + std::to_string(completed) + "/" + std::to_string(requested) +
+			" requested packages; slot " + std::to_string(cursor) + "/" + std::to_string(store.slotCount) +
+			(cursor < store.slotCount ? " (time limit; retry resumes here)." : " (reached end)."));
 		return false;
 	}
 
@@ -210,6 +225,7 @@ namespace StaticArchetypeStreaming
 
 	void Clear()
 	{
+		nextSearchSlot.clear();
 		while (!retainedBatches.empty())
 		{
 			const auto hash = retainedBatches.begin()->first;

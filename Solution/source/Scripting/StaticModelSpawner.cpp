@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <mutex>
+#include <iterator>
 
 namespace StaticModelSpawner
 {
@@ -541,6 +542,46 @@ namespace StaticModelSpawner
 		return diag;
 	}
 
+	struct StaticPlacement
+	{
+		Hash hash;
+		float x, y, z;
+	};
+
+	static const StaticPlacement* FindPlacement(Hash hash)
+	{
+		static constexpr StaticPlacement placements[] = {
+#include "StaticModelOrigins.inc"
+		};
+		const auto it = std::lower_bound(std::begin(placements), std::end(placements), hash,
+			[](const StaticPlacement& placement, Hash target) { return placement.hash < target; });
+		return it != std::end(placements) && it->hash == hash ? it : nullptr;
+	}
+
+	// The scene slot is shared with story scripts. Stop only a scene we started.
+	class OriginScene
+	{
+		bool active = false;
+	public:
+		void Load(const StaticPlacement& origin, DWORD timeout)
+		{
+			active = !IS_NEW_LOAD_SCENE_ACTIVE() &&
+				NEW_LOAD_SCENE_START_SPHERE(origin.x, origin.y, origin.z, 180.0f, 0);
+			if (!active)
+			{
+				addlog(ige::LogType::LOG_WARNING, "[StaticModelSpawner] Origin scene unavailable.");
+				return;
+			}
+			const DWORD start = GetTickCount();
+			while (!IS_NEW_LOAD_SCENE_LOADED() && GetTickCount() - start < timeout)
+				scriptWait(0);
+			addlog(ige::LogType::LOG_INFO, IS_NEW_LOAD_SCENE_LOADED() ?
+				"[StaticModelSpawner] Origin scene ready." : "[StaticModelSpawner] Origin scene timed out.");
+		}
+
+		~OriginScene() { if (active) NEW_LOAD_SCENE_STOP(); }
+	};
+
 	int SpawnStaticModel(Hash modelHash, const std::string& modelName, const Vector3& position, const Vector3& rotation, bool dynamic, bool addToDb)
 	{
 		if (!modelHash) return 0;
@@ -549,6 +590,18 @@ namespace StaticModelSpawner
 			Game::Print::ShowNotification("~r~Spawn Error:", "Spooner entity limit reached.");
 			return 0;
 		}
+
+		const Vector3 destination = position;
+		const auto* origin = FindPlacement(modelHash);
+		OriginScene scene;
+		if (origin)
+		{
+			addlog(ige::LogType::LOG_INFO, "[StaticModelSpawner] YMAP origin for " + ToHexStr(modelHash) +
+				": " + std::to_string(origin->x) + ", " + std::to_string(origin->y) + ", " + std::to_string(origin->z));
+			scene.Load(*origin, g_StreamingTimeoutMs);
+		}
+		else
+			addlog(ige::LogType::LOG_INFO, "[StaticModelSpawner] No indexed YMAP placement for " + ToHexStr(modelHash));
 
 		int registryIndex = -1;
 		const bool alreadyAvailable = IS_MODEL_IN_CDIMAGE(modelHash) ||
@@ -592,8 +645,8 @@ namespace StaticModelSpawner
 			return 0;
 		}
 
-		// 3. Create the object at target destination
-		int obj = CREATE_OBJECT_NO_OFFSET(modelHash, position.x, position.y, position.z, false, true, false);
+		int obj = CREATE_OBJECT_NO_OFFSET(modelHash, origin ? origin->x : destination.x,
+			origin ? origin->y : destination.y, origin ? origin->z : destination.z, false, true, false);
 
 		if (obj == 0)
 		{
@@ -607,8 +660,26 @@ namespace StaticModelSpawner
 		}
 
 		// 4. Configure rotation and entity flags
-		SET_ENTITY_ROTATION(obj, rotation.x, rotation.y, rotation.z, 2, true);
 		SET_ENTITY_AS_MISSION_ENTITY(obj, true, true);
+		if (origin)
+		{
+			SET_ENTITY_COORDS_NO_OFFSET(obj, destination.x, destination.y, destination.z, false, false, true);
+			const auto actual = GET_ENTITY_COORDS(obj, true);
+			const float dx = actual.x - destination.x, dy = actual.y - destination.y, dz = actual.z - destination.z;
+			if (!DOES_ENTITY_EXIST(obj) || !(dx * dx + dy * dy + dz * dz < 1.0f))
+			{
+				DELETE_OBJECT(&obj);
+				if (!IsModelPinned(modelHash)) SET_MODEL_AS_NO_LONGER_NEEDED(modelHash);
+				if (resolvedYtyp) StaticArchetypeStreaming::Release(modelHash);
+				addlog(ige::LogType::LOG_ERROR, "[StaticModelSpawner] Relocation failed for " + ToHexStr(modelHash));
+				Game::Print::ShowNotification("~r~Spawn Error:", "The copy could not be moved from its map placement.");
+				return 0;
+			}
+			addlog(ige::LogType::LOG_INFO, "[StaticModelSpawner] Relocated copy " + std::to_string(obj) +
+				" from its YMAP placement to " + std::to_string(actual.x) + ", " +
+				std::to_string(actual.y) + ", " + std::to_string(actual.z));
+		}
+		SET_ENTITY_ROTATION(obj, rotation.x, rotation.y, rotation.z, 2, true);
 		if (bForceCollisionLoad)
 			SET_ENTITY_LOAD_COLLISION_FLAG(obj, true, 0);
 		SET_ENTITY_DYNAMIC(obj, dynamic);
