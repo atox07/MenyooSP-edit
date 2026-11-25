@@ -556,7 +556,7 @@ namespace StaticModelSpawner
 	{
 		const auto it = std::lower_bound(std::begin(g_placements), std::end(g_placements), hash,
 			[](const StaticPlacement& placement, Hash target) { return placement.hash < target; });
-		return it != std::end(placements) && it->hash == hash ? it : nullptr;
+		return it != std::end(g_placements) && it->hash == hash ? it : nullptr;
 	}
 
 	// The scene slot is shared with story scripts. Stop only a scene we started.

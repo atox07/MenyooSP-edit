@@ -73,6 +73,9 @@ namespace StaticInspector
 			float x = 0, y = 0, z = 0;
 		};
 
+		// Evita la macro max di Windows.h
+		inline float MaxF(float a, float b) { return a > b ? a : b; }
+
 		float Dist3(const P3& a, const P3& b)
 		{
 			const float dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
@@ -128,8 +131,8 @@ namespace StaticInspector
 		{
 			HitInfo out;
 
-			const Vector3 camPos = GameplayCamera::Position_get();
-			const Vector3 camDir = GameplayCamera::DirectionFromScreenCentre_get();
+			const Vector3 camPos = GameplayCamera::GetPosition();
+			const Vector3 camDir = GameplayCamera::GetDirectionFromScreenCentre();
 			const float ex = camPos.x + camDir.x * kMaxDistance;
 			const float ey = camPos.y + camDir.y * kMaxDistance;
 			const float ez = camPos.z + camDir.z * kMaxDistance;
@@ -222,8 +225,8 @@ namespace StaticInspector
 				if (!info)
 					continue;
 
-				const float ax = std::max(std::fabs(info->m_aabbMin[0]), std::fabs(info->m_aabbMax[0]));
-				const float ay = std::max(std::fabs(info->m_aabbMin[1]), std::fabs(info->m_aabbMax[1]));
+				const float ax = MaxF(std::fabs(info->m_aabbMin[0]), std::fabs(info->m_aabbMax[0]));
+				const float ay = MaxF(std::fabs(info->m_aabbMin[1]), std::fabs(info->m_aabbMax[1]));
 				const float hb = std::sqrt(ax * ax + ay * ay); // raggio orizzontale, valido per qualsiasi rotazione su Z
 				const float dist = std::sqrt(dx * dx + dy * dy);
 				if (dist > hb + 1.0f)
@@ -302,7 +305,7 @@ namespace StaticInspector
 		g_lastLoggedHash = 0;
 		g_candidatesValid = false;
 		if (g_active && !g_namesLoaded)
-			LoadNames(GetPathff(Pathff::Main, true) + "allarchetypes.txt");
+			LoadNames(GetPathffA(Pathff::Main, true) + "allarchetypes.txt");
 		Game::Print::PrintBottomLeft(std::string(g_active ? "Inspector: ~g~ON" : "Inspector: ~r~OFF"));
 	}
 
