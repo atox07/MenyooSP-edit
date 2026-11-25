@@ -73,6 +73,41 @@ namespace StaticInspector
 			float x = 0, y = 0, z = 0;
 		};
 
+		// joaat calcolato qui (minuscolo), senza chiamare la funzione hash interna del gioco.
+		unsigned int Joaat(const std::string& str)
+		{
+			unsigned int h = 0;
+			for (unsigned char c : str)
+			{
+				h += static_cast<unsigned char>(std::tolower(c));
+				h += (h << 10);
+				h ^= (h >> 6);
+			}
+			h += (h << 3);
+			h ^= (h >> 11);
+			h += (h << 15);
+			return h;
+		}
+
+		// GetModelInfo e' una funzione interna del gioco: la chiamo dentro __try/__except
+		// cosi' un eventuale errore non fa crashare tutto; dopo il primo errore la disattivo.
+		bool g_modelInfoFaulted = false;
+		const CBaseModelInfo* SafeGetModelInfo(Hash h)
+		{
+			if (!GetModelInfo || g_modelInfoFaulted)
+				return nullptr;
+			__try
+			{
+				int idx = -1;
+				return GetModelInfo(static_cast<unsigned int>(h), &idx);
+			}
+			__except (EXCEPTION_EXECUTE_HANDLER)
+			{
+				g_modelInfoFaulted = true;
+				return nullptr;
+			}
+		}
+
 		// Evita la macro max di Windows.h
 		inline float MaxF(float a, float b) { return a > b ? a : b; }
 
@@ -220,8 +255,7 @@ namespace StaticInspector
 				if (std::fabs(dx) > kBroad || std::fabs(dy) > kBroad)
 					continue;
 
-				int idx = -1;
-				const CBaseModelInfo* info = GetModelInfo(o.hash, &idx);
+				const CBaseModelInfo* info = SafeGetModelInfo(static_cast<Hash>(o.hash));
 				if (!info)
 					continue;
 
@@ -238,6 +272,9 @@ namespace StaticInspector
 
 				g_candidates.push_back({ static_cast<Hash>(o.hash), hb > 0.01f ? dist / hb : dist, dist });
 			}
+
+			if (g_modelInfoFaulted)
+				addlog(ige::LogType::LOG_ERROR, "[Inspector] GetModelInfo ha generato un errore: ricerca candidati disattivata.");
 
 			std::sort(g_candidates.begin(), g_candidates.end(),
 				[](const Candidate& a, const Candidate& b) { return a.score < b.score; });
@@ -293,7 +330,7 @@ namespace StaticInspector
 			if (line.empty())
 				continue;
 			const std::string lower = ToLower(line);
-			g_names.emplace(static_cast<Hash>(GTAmemory::GetHashKey(lower)), line);
+			g_names.emplace(static_cast<Hash>(Joaat(lower)), line);
 		}
 		addlog(ige::LogType::LOG_INFO, "[Inspector] Caricati " + std::to_string(g_names.size()) + " nomi modello da " + path);
 		return g_names.size();
@@ -302,6 +339,7 @@ namespace StaticInspector
 	void Toggle()
 	{
 		g_active = !g_active;
+		addlog(ige::LogType::LOG_INFO, std::string("[Inspector] Toggle -> ") + (g_active ? "ON" : "OFF"));
 		g_lastLoggedHash = 0;
 		g_candidatesValid = false;
 		if (g_active && !g_namesLoaded)
