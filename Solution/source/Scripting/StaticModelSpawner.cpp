@@ -542,18 +542,19 @@ namespace StaticModelSpawner
 		return diag;
 	}
 
-	struct StaticPlacement
-	{
-		Hash hash;
-		float x, y, z;
+	static constexpr StaticPlacement g_placements[] = {
+#include "StaticModelOrigins.inc"
 	};
+
+	const StaticPlacement* GetIndexedPlacements(size_t& count)
+	{
+		count = std::size(g_placements);
+		return g_placements;
+	}
 
 	static const StaticPlacement* FindPlacement(Hash hash)
 	{
-		static constexpr StaticPlacement placements[] = {
-#include "StaticModelOrigins.inc"
-		};
-		const auto it = std::lower_bound(std::begin(placements), std::end(placements), hash,
+		const auto it = std::lower_bound(std::begin(g_placements), std::end(g_placements), hash,
 			[](const StaticPlacement& placement, Hash target) { return placement.hash < target; });
 		return it != std::end(placements) && it->hash == hash ? it : nullptr;
 	}

@@ -39,6 +39,14 @@ namespace StaticModelSpawner
 		std::string failureReason;
 	};
 
+	// Una sola posizione (origin YMAP) per modello, tabella ordinata per hash.
+	struct StaticPlacement
+	{
+		Hash hash;
+		float x, y, z;
+	};
+	const StaticPlacement* GetIndexedPlacements(size_t& count);
+
 	// Runtime settings
 	extern bool bAutoResolveUnstreamedModels;
 	extern bool bPinSpawnedStaticModels;

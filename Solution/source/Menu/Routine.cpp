@@ -30,6 +30,7 @@
 #include "..\Scripting\GameplayCamera.h"
 #include "..\Memory\GTAmemory.h"
 #include "..\Scripting\StaticModelSpawner.h"
+#include "..\Scripting\StaticInspector.h"
 #include "..\Scripting\CustomHelpText.h"
 #include "..\Scripting\GTAplayer.h"
 #include "..\Scripting\GTAentity.h"
@@ -3752,6 +3753,7 @@ void ThreadMenuLoops2()
 		WAIT(0);
 
 		StaticModelSpawner::PinnedManager::Tick();
+		StaticInspector::Tick();
 
 		VehicleTorqueMultiplier();
 		VehicleMaxSpeedMultiplier();
